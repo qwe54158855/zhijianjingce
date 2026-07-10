@@ -72,6 +72,30 @@ services:
     depends_on:
       - spring-api
 
+  lora-service:
+    build: ./wafer-lora-service
+    ports: ["8000:8000"]
+    runtime: nvidia
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      LORA_MODEL_ID: runwayml/stable-diffusion-v1-5
+      LORA_TORCH_DTYPE: float16
+      LORA_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./wafer-lora-service/loras:/app/loras
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   pgdata:
   minio_data:
