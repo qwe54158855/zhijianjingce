@@ -1,0 +1,32 @@
+name: wafer-showcase CI
+
+on:
+  push:
+    paths: ['wafer-showcase/**']
+    branches: [master, main]
+  pull_request:
+    paths: ['wafer-showcase/**']
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wafer-showcase
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: wafer-showcase/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
