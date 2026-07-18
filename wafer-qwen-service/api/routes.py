@@ -8,7 +8,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 
 from core.config import settings
-from engine import enhancer, detector as det_mod, visualizer, reporter
+from engine import enhancer, detector as det_mod, visualizer, reporter, angle_generator
 from models.schemas import (
     Detection,
     EnhanceAnalysis,
@@ -16,6 +16,8 @@ from models.schemas import (
     QwenEnhanceResponse,
     QwenReportRequest,
     QwenReportResponse,
+    QwenAnglesRequest,
+    QwenAnglesResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,8 +107,9 @@ async def enhance_endpoint(request: QwenEnhanceRequest):
             "sharpen": True,
         })
 
-    # 3. 圆形缺陷检测（霍夫圆 + blob）
-    detections = det_mod.detect_circular_defects(enhanced)
+    # 3. 圆形缺陷检测（霍夫圆 + blob），根据风格自动适配
+    is_bf = (style == "brightfield")
+    detections = det_mod.detect_circular_defects(enhanced, is_brightfield=is_bf)
 
     # 4. 图像分析
     img_info = det_mod.analyze_enhanced_image(enhanced)
@@ -190,3 +193,29 @@ async def analyze_only(request: QwenEnhanceRequest):
         "success": True,
         "analysis": {"message": "分析完成", "detections_count": 0},
     }
+
+
+@router.post("/angles", response_model=QwenAnglesResponse)
+async def angles_endpoint(request: QwenAnglesRequest):
+    """生成多角度 193nm 亮场视图，含缺陷检测框"""
+    start = time.time()
+
+    img = _decode_image(request.image)
+    brightfield = enhancer.brightfield_enhance(img)
+    angle_views = angle_generator.generate_angle_views(brightfield)
+
+    result = {}
+    for angle, view_img in angle_views.items():
+        dets = det_mod.detect_circular_defects(view_img, is_brightfield=True)
+        view_img = visualizer.draw_detections(view_img, dets)
+        _, buf = cv2.imencode(".jpg", view_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        result[str(angle)] = base64.b64encode(buf).decode("utf-8")
+
+    elapsed = int((time.time() - start) * 1000)
+    logger.info(f"Angles generated: {len(angle_views)} views, {elapsed}ms")
+
+    return QwenAnglesResponse(
+        success=True,
+        angles=result,
+        inference_time_ms=elapsed,
+    )

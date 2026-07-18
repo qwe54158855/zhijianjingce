@@ -54,3 +54,14 @@ class QwenHealthResponse(BaseModel):
     status: str = "UP"
     llama_available: bool = False
     device: str = "cpu"
+
+
+class QwenAnglesRequest(BaseModel):
+    image: str = Field(description="Base64 编码的增强图片")
+    format: str = "jpg"
+
+
+class QwenAnglesResponse(BaseModel):
+    success: bool = True
+    angles: dict[str, str] = Field(description="{角度: base64图片} 字典")
+    inference_time_ms: int = 0
