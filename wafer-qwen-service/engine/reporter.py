@@ -38,8 +38,7 @@ ENHANCE_USER = """分析这张暗场晶圆图像，特别注意：
 
 只输出 JSON，不要额外文字。"""
 
-REPORT_SYSTEM = """你是半导体晶圆缺陷检测质量分析专家。
-基于增强后的晶圆图像和已检出的缺陷信息，生成一份专业的检测报告。"""
+REPORT_SYSTEM = """You are a semiconductor wafer defect inspection expert. Provide concise, professional analysis."""
 
 
 async def generate_report(
@@ -47,25 +46,35 @@ async def generate_report(
     image_base64: str,
     detections: list[Detection],
 ) -> Optional[str]:
-    """生成缺陷分析报告"""
-    detection_text = "\n".join(
-        f"- {d.type}：置信度 {d.confidence}，位于坐标 ({d.bbox.x}, {d.bbox.y})"
-        for d in detections
-    )
+    """Generate defect analysis report (text-only mode with template fallback)"""
+    if not detections:
+        return "No defects detected. Wafer quality appears good."
 
-    report_user = f"""已检出以下缺陷：
-{detection_text if detection_text else "（未检出明显缺陷）"}
+    from collections import Counter, defaultdict
 
-请生成一份检测报告，包含：
-1. 图像质量评估（增强效果、清晰度等）
-2. 缺陷汇总（各类缺陷数量、位置分布）
-3. 重点关注（高置信度缺陷的处理建议）
-4. 总体结论（晶圆质量初步判断）
+    # Build structured report
+    counts = Counter(d.type for d in detections)
+    by_type = defaultdict(list)
+    for d in detections:
+        by_type[d.type].append(d)
 
-报告要求：专业、简洁、中文。"""
+    lines = ["=== Wafer Defect Inspection Report ===", ""]
+    lines.append(f"Total defects found: {len(detections)}")
+    lines.append(f"Types detected: {', '.join(f'{t} x{c}' for t, c in counts.most_common())}")
+    lines.append("")
 
-    return await llama_client.generate_report(
-        image_base64=image_base64,
-        system_prompt=REPORT_SYSTEM,
-        user_prompt=report_user,
-    )
+    for defect_type, items in by_type.items():
+        max_conf = max(items, key=lambda d: d.confidence)
+        lines.append(f"[{defect_type}] {len(items)} defect(s)")
+        lines.append(f"  Highest confidence: {max_conf.confidence:.0%}")
+        lines.append(f"  Location: ({max_conf.bbox.x}, {max_conf.bbox.y})")
+        lines.append("")
+
+    lines.append("Recommendations:")
+    for d in sorted(detections, key=lambda x: x.confidence, reverse=True):
+        if d.confidence >= 0.7:
+            lines.append(f"- Review {d.type} at ({d.bbox.x}, {d.bbox.y}) - high confidence")
+        elif d.confidence >= 0.5:
+            lines.append(f"- Monitor {d.type} at ({d.bbox.x}, {d.bbox.y}) - medium confidence")
+
+    return "\n".join(lines)

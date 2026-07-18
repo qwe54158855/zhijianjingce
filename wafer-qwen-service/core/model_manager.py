@@ -1,5 +1,9 @@
 import json
 import logging
+import os
+import subprocess
+import sys
+import time
 from typing import Optional
 
 import httpx
@@ -16,6 +20,48 @@ class LlamaClient:
         self.base_url = settings.llama_server_url.rstrip("/")
         self.timeout = settings.llama_timeout
         self.client = httpx.AsyncClient(timeout=self.timeout)
+        self.server_process = None
+        self._ensure_server()
+
+    def _ensure_server(self):
+        """确保 llama-server 在运行（如果通过 URL 可访问则跳过）"""
+        # 如果配置使用外部服务器，不自动启动
+        if "localhost" not in self.base_url and "127.0.0.1" not in self.base_url:
+            return
+        # 启动 WSL 中的 llama-server
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"{self.base_url.replace('/v1','')}/health")
+            urllib.request.urlopen(req, timeout=2)
+            logger.info("llama-server already running")
+            return
+        except Exception:
+            logger.info("Starting llama-server via WSL...")
+
+        model_path = settings.llama_model_path
+        if not os.path.exists(model_path):
+            # 尝试从 WSL 路径加载
+            wsl_model = model_path.replace("D:", "/mnt/d").replace("\\", "/").replace("d:", "/mnt/d")
+            model_path = wsl_model
+
+        cmd = [
+            "wsl.exe", "bash", "-c",
+            f"export LD_LIBRARY_PATH=/tmp/llama-bin/build/bin && exec /tmp/llama-bin/build/bin/llama-server "
+            f"-m {model_path} "
+            f"--port {self.base_url.split(':')[-1].split('/')[0] or '8002'} "
+            f"--host 0.0.0.0 --ctx-size 4096 --batch-size 256 --n-gpu-layers 0"
+        ]
+        logger.info(f"Launching: {' '.join(cmd)}")
+        try:
+            self.server_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            logger.info(f"llama-server started, PID: {self.server_process.pid}")
+        except Exception as e:
+            logger.error(f"Failed to start llama-server: {e}")
 
     async def check_health(self) -> bool:
         """检查 llama-server 是否可用"""
@@ -75,6 +121,33 @@ class LlamaClient:
             return None
         except Exception as e:
             logger.error(f"Qwen inference failed: {e}")
+            return None
+
+    async def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+    ) -> Optional[str]:
+        """纯文本聊天（不带图片）"""
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        try:
+            r = await self.client.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+            )
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"Text generation failed: {e}")
             return None
 
     async def generate_report(

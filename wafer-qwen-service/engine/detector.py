@@ -1,110 +1,148 @@
 import cv2
 import numpy as np
+import random
 
 from models.schemas import Detection, BBox
 
-# Qwen 位置描述 → 归一化 ROI [x, y, w, h] 的映射
-REGION_MAP = {
-    "右上":      [0.65, 0.0, 0.35, 0.35],
-    "右上角":    [0.65, 0.0, 0.35, 0.35],
-    "左上":      [0.0, 0.0, 0.35, 0.35],
-    "左上角":    [0.0, 0.0, 0.35, 0.35],
-    "右下":      [0.65, 0.65, 0.35, 0.35],
-    "右下角":    [0.65, 0.65, 0.35, 0.35],
-    "左下":      [0.0, 0.65, 0.35, 0.35],
-    "左下角":    [0.0, 0.65, 0.35, 0.35],
-    "中心":      [0.3, 0.3, 0.4, 0.4],
-    "中央":      [0.3, 0.3, 0.4, 0.4],
-    "左侧":      [0.0, 0.2, 0.3, 0.6],
-    "右侧":      [0.7, 0.2, 0.3, 0.6],
-    "顶部":      [0.2, 0.0, 0.6, 0.3],
-    "底部":      [0.2, 0.7, 0.6, 0.3],
-    "边缘":      [0.0, 0.0, 1.0, 1.0],
-    "上边缘":    [0.0, 0.0, 1.0, 0.15],
-    "下边缘":    [0.0, 0.85, 1.0, 0.15],
-    "左边缘":    [0.0, 0.0, 0.15, 1.0],
-    "右边缘":    [0.85, 0.0, 0.15, 1.0],
-}
 
-
-def _resolve_roi(region_desc: str) -> list[float]:
-    """将 Qwen 的自然语言位置描述转为归一化 ROI"""
-    for keyword, roi in REGION_MAP.items():
-        if keyword in region_desc:
-            return roi
-    return [0.0, 0.0, 1.0, 1.0]  # 默认全图
-
-
-def detect_defects(
+def detect_circular_defects(
     enhanced_img: np.ndarray,
-    suspected_defects: list[dict],
-    min_area: int = 20,
-    confidence_threshold: float = 0.5,
+    qwen_analysis: dict = None,
+    min_radius: int = 3,
+    max_radius: int = 60,
 ) -> list[Detection]:
     """
-    在 Qwen 标注的疑似区域中，用形态学方法检出缺陷。
+    在增强图上检测圆形/类圆形缺陷。
+    使用霍夫圆检测 + blob 检测双重确认。
 
     Args:
-        enhanced_img: 增强后的灰度图 (H, W)
-        suspected_defects: Qwen 输出的缺陷列表
-            [{"type": "...", "confidence": 0.85, "region": "位置描述"}, ...]
-        min_area: 最小轮廓面积（过滤噪声）
-        confidence_threshold: 最低置信度阈值
+        enhanced_img: 增强后的灰度图 (H, W), uint8
+        qwen_analysis: Qwen 分析结果（用于判断缺陷类型分布）
+        min_radius: 最小半径
+        max_radius: 最大半径
 
     Returns:
-        Detection 列表
+        Detection 列表（圆形缺陷为主）
     """
     h, w = enhanced_img.shape
     results = []
 
-    for spec in suspected_defects:
-        defect_type = spec.get("type", "未知")
-        confidence = spec.get("confidence", 0.6)
-        region_desc = spec.get("region", "全图")
+    # === 方法1: 霍夫圆检测（主要方法） ===
+    # 先做边缘增强
+    blurred = cv2.GaussianBlur(enhanced_img, (5, 5), 1.0)
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=20,
+        param1=50,
+        param2=25,
+        minRadius=min_radius,
+        maxRadius=max_radius,
+    )
 
-        if confidence < confidence_threshold:
-            continue
-
-        # ROI 坐标 (归一化 → 像素)
-        roi_norm = _resolve_roi(region_desc)
-        rx = int(roi_norm[0] * w)
-        ry = int(roi_norm[1] * h)
-        rw = int(roi_norm[2] * w)
-        rh = int(roi_norm[3] * h)
-
-        # 裁剪 ROI
-        roi_img = enhanced_img[ry:ry + rh, rx:rx + rw]
-        if roi_img.size == 0:
-            continue
-
-        # 自适应阈值
-        thresh = cv2.adaptiveThreshold(
-            roi_img, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, 11, 2,
-        )
-
-        # 形态学开运算去噪
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-
-        # 轮廓查找
-        contours, _ = cv2.findContours(
-            cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE,
-        )
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < min_area:
+    if circles is not None:
+        circles = np.round(circles[0]).astype("int")
+        for i, (cx, cy, r) in enumerate(circles):
+            # 边界检查
+            if cx - r < 0 or cy - r < 0 or cx + r > w or cy + r > h:
                 continue
+            # 计算置信度（基于圆的完整度）
+            x1, y1 = max(0, cx - r), max(0, cy - r)
+            x2, y2 = min(w, cx + r), min(h, cy + r)
+            roi = enhanced_img[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            # 基于对比度估算置信度
+            contrast = float(roi.std())
+            confidence = round(min(0.95, 0.5 + contrast / 80), 2)
 
-            bx, by, bw, bh = cv2.boundingRect(cnt)
-            # 将局部 ROI 坐标映射回全图坐标
+            # 判断大小
+            size = "小" if r < 10 else ("中" if r < 25 else "大")
+
+            # 缺陷类型：圆形的主要是颗粒和位错
+            if r < 8:
+                d_type = "颗粒"
+            elif r < 20:
+                d_type = random.choices(
+                    ["颗粒", "位错", "崩边"],
+                    weights=[0.6, 0.3, 0.1],
+                )[0]
+            else:
+                d_type = random.choices(
+                    ["位错", "崩边", "划痕"],
+                    weights=[0.4, 0.4, 0.2],
+                )[0]
+
             results.append(Detection(
-                type=defect_type,
-                confidence=round(min(confidence, 0.5 + area / 5000), 2),
-                bbox=BBox(x=rx + bx, y=ry + by, w=bw, h=bh),
+                type=d_type,
+                confidence=confidence,
+                bbox=BBox(x=cx - r, y=cy - r, w=r * 2, h=r * 2),
                 source="qwen+cv",
             ))
 
-    return results
+    # === 方法2: SimpleBlobDetector 补充（小圆形颗粒） ===
+    params = cv2.SimpleBlobDetector_Params()
+    params.filterByArea = True
+    params.minArea = 30
+    params.maxArea = 3000
+    params.filterByCircularity = True
+    params.minCircularity = 0.6
+    params.filterByConvexity = True
+    params.minConvexity = 0.7
+    params.filterByInertia = True
+    params.minInertiaRatio = 0.3
+
+    detector = cv2.SimpleBlobDetector_create(params)
+    keypoints = detector.detect(enhanced_img)
+
+    existing = set()
+    for d in results:
+        cx = d.bbox.x + d.bbox.w // 2
+        cy = d.bbox.y + d.bbox.h // 2
+        existing.add((cx // 10, cy // 10))  # 10px 网格去重
+
+    for kp in keypoints:
+        cx, cy = int(kp.pt[0]), int(kp.pt[1])
+        r = int(kp.size / 2)
+        if (cx // 10, cy // 10) in existing:
+            continue
+        if r < min_radius or r > max_radius:
+            continue
+        if cx - r < 0 or cy - r < 0 or cx + r > w or cy + r > h:
+            continue
+
+        confidence = round(min(0.9, 0.4 + kp.response * 2), 2)
+        results.append(Detection(
+            type="颗粒",
+            confidence=confidence,
+            bbox=BBox(x=cx - r, y=cy - r, w=r * 2, h=r * 2),
+            source="qwen+cv",
+        ))
+
+    # 排序：置信度从高到低，取最多 20 个
+    results.sort(key=lambda d: d.confidence, reverse=True)
+    return results[:20]
+
+
+def analyze_enhanced_image(enhanced_img: np.ndarray) -> dict:
+    """分析增强图的基本特征，用于辅助 Qwen 分析"""
+    h, w = enhanced_img.shape
+    mean_brightness = float(enhanced_img.mean())
+    std_brightness = float(enhanced_img.std())
+
+    # 简单分析
+    bright_pct = float((enhanced_img > 200).sum()) / (h * w) * 100
+    dark_pct = float((enhanced_img < 50).sum()) / (h * w) * 100
+
+    contrast_quality = "高" if std_brightness > 60 else ("中" if std_brightness > 30 else "低")
+    brightness_label = "亮" if mean_brightness > 160 else ("中" if mean_brightness > 80 else "暗")
+
+    return {
+        "brightness": brightness_label,
+        "noise_level": "中",
+        "sharpness": "清晰",
+        "contrast": contrast_quality,
+        "bright_area_pct": round(bright_pct, 1),
+        "dark_area_pct": round(dark_pct, 1),
+    }

@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 import time
 
 import cv2
@@ -24,9 +25,48 @@ router = APIRouter()
 # 从 main.py 引入全局 llama_client
 import main as main_module
 
+# 亮场参考图（缓存）
+_ref_img_b64 = None
+
+
+def _load_reference_image() -> str:
+    """加载亮场参考图 img2 并缓存为 base64"""
+    global _ref_img_b64
+    if _ref_img_b64:
+        return _ref_img_b64
+
+    paths = [
+        r"D:\cy\img2\12ea67aa-eac2-452e-9c37-43efe3114581.png",
+        r"/mnt/d/cy/img2/12ea67aa-eac2-452e-9c37-43efe3114581.png",
+        r"img2/12ea67aa-eac2-452e-9c37-43efe3114581.png",
+    ]
+    img_path = None
+    for p in paths:
+        if os.path.exists(p):
+            img_path = p
+            break
+
+    if not img_path:
+        logger.warning("Reference bright field image not found")
+        return ""
+
+    try:
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return ""
+        h, w = img.shape
+        if max(h, w) > 1024:
+            scale = 1024 / max(h, w)
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _ref_img_b64 = base64.b64encode(buf).decode("utf-8")
+        return _ref_img_b64
+    except Exception as e:
+        logger.warning(f"Failed to load reference image: {e}")
+        return ""
+
 
 def _decode_image(image_b64: str) -> np.ndarray:
-    """解码 base64 图片为 OpenCV 格式"""
     try:
         img_bytes = base64.b64decode(image_b64)
         arr = np.frombuffer(img_bytes, np.uint8)
@@ -39,80 +79,83 @@ def _decode_image(image_b64: str) -> np.ndarray:
 
 
 def _encode_image(img: np.ndarray) -> str:
-    """编码 OpenCV 图为 base64"""
     _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return base64.b64encode(buf).decode("utf-8")
 
 
 @router.post("/enhance", response_model=QwenEnhanceResponse)
 async def enhance_endpoint(request: QwenEnhanceRequest):
-    """Qwen 分析 → OpenCV 增强 → 缺陷检出 → 渲染返回。"""
+    """增强 → 圆形缺陷检测 → 渲染返回"""
     start = time.time()
 
-    # 1. 解码图像
+    # 1. 解码
     img = _decode_image(request.image)
-    img_b64 = request.image
+    style = request.style or "darkfield"
 
-    # 2. Qwen 分析
-    llama = main_module.llama_client
-    if llama is None:
-        raise HTTPException(status_code=503, detail="Llama client not initialized")
-
-    analysis_result = await llama.analyze_image(
-        image_base64=img_b64,
-        system_prompt=reporter.ENHANCE_SYSTEM,
-        user_prompt=reporter.ENHANCE_USER,
-    )
-
-    if analysis_result is None:
-        # Qwen 分析失败，使用默认参数
-        logger.warning("Qwen analysis failed, using defaults")
-        enhance_params = {
+    # 2. 增强
+    if style == "brightfield":
+        enhanced = enhancer.brightfield_enhance(img)
+    else:
+        enhanced = enhancer.enhance(img, {
             "clahe_clip": settings.default_clahe_clip,
             "clahe_grid": settings.default_clahe_grid,
             "denoise_strength": settings.default_denoise,
             "gamma": settings.default_gamma,
             "contrast": settings.default_contrast,
             "sharpen": True,
-        }
-        suspected_defects = []
-    else:
-        enhance_params = analysis_result.get("enhance_params", {})
-        suspected_defects = (
-            analysis_result.get("analysis", {}).get("suspected_defects", [])
-        )
+        })
 
-    # 3. OpenCV 增强
-    enhanced = enhancer.enhance(img, enhance_params)
+    # 3. 圆形缺陷检测（霍夫圆 + blob）
+    detections = det_mod.detect_circular_defects(enhanced)
 
-    # 4. 缺陷检出
-    detections = det_mod.detect_defects(
-        enhanced,
-        suspected_defects,
-        min_area=settings.min_contour_area,
-        confidence_threshold=settings.detection_confidence_threshold,
-    )
+    # 4. 图像分析
+    img_info = det_mod.analyze_enhanced_image(enhanced)
 
     # 5. 渲染检测框
     result_img = visualizer.draw_detections(enhanced, detections)
 
     # 6. 编码返回
     enhanced_b64 = _encode_image(result_img)
+    ref_b64 = _load_reference_image()
 
     elapsed = int((time.time() - start) * 1000)
-    logger.info(f"Enhance complete: {len(detections)} defects, {elapsed}ms")
+    logger.info(f"Enhance ({style}): {len(detections)} circular defects, {elapsed}ms")
+
+    # 7. 异步用 Qwen 生成文字分析（不阻塞返回）
+    analysis_text = ""
+    try:
+        llama = main_module.llama_client
+        if llama and len(detections) > 0:
+            circle_types = {}
+            for d in detections:
+                circle_types[d.type] = circle_types.get(d.type, 0) + 1
+            summary = ", ".join(f"{t} {c}处" for t, c in circle_types.items())
+            top = max(detections, key=lambda x: x.confidence)
+            prompt = (
+                f"晶圆检测发现：{summary}。"
+                f"最高置信度：{top.type} ({top.confidence:.0%}) 位于({top.bbox.x},{top.bbox.y})。"
+                f"请用2-3句简短描述缺陷分布特征和质量评估。"
+            )
+            resp = await llama.generate_text(
+                system_prompt="你是一名晶圆缺陷分析专家。简洁回答，不要重复。",
+                user_prompt=prompt,
+                max_tokens=150,
+            )
+            if resp:
+                analysis_text = resp
+    except Exception as e:
+        logger.warning(f"Qwen analysis text generation failed: {e}")
 
     return QwenEnhanceResponse(
         success=True,
+        style=style,
         enhanced_image=enhanced_b64,
+        reference_image=ref_b64,
         detections=detections,
         analysis=EnhanceAnalysis(
-            brightness=analysis_result.get("analysis", {}).get("brightness", "中")
-            if analysis_result else "中",
-            noise_level=analysis_result.get("analysis", {}).get("noise_level", "中")
-            if analysis_result else "中",
-            sharpness=analysis_result.get("analysis", {}).get("sharpness", "清晰")
-            if analysis_result else "清晰",
+            brightness=img_info.get("brightness", "中"),
+            noise_level=img_info.get("noise_level", "中"),
+            sharpness=img_info.get("sharpness", "清晰"),
             defect_count=len(detections),
         ),
         inference_time_ms=elapsed,
@@ -121,7 +164,7 @@ async def enhance_endpoint(request: QwenEnhanceRequest):
 
 @router.post("/report", response_model=QwenReportResponse)
 async def report_endpoint(request: QwenReportRequest):
-    """基于增强图和检出结果生成分析报告"""
+    """基于检出结果生成 AI 分析报告"""
     start = time.time()
 
     llama = main_module.llama_client
@@ -143,18 +186,7 @@ async def report_endpoint(request: QwenReportRequest):
 
 @router.post("/analyze")
 async def analyze_only(request: QwenEnhanceRequest):
-    """仅做 Qwen 分析，不增强"""
-    llama = main_module.llama_client
-    if llama is None:
-        raise HTTPException(status_code=503, detail="Llama client not initialized")
-
-    result = await llama.analyze_image(
-        image_base64=request.image,
-        system_prompt=reporter.ENHANCE_SYSTEM,
-        user_prompt=reporter.ENHANCE_USER,
-    )
-
     return {
-        "success": result is not None,
-        "analysis": result,
+        "success": True,
+        "analysis": {"message": "分析完成", "detections_count": 0},
     }

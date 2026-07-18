@@ -26,11 +26,14 @@ class EnhanceAnalysis(BaseModel):
 class QwenEnhanceRequest(BaseModel):
     image: str = Field(description="Base64 编码的图片数据")
     format: str = "jpg"
+    style: str = "darkfield"  # "darkfield" | "brightfield"
 
 
 class QwenEnhanceResponse(BaseModel):
     success: bool = True
+    style: str = "darkfield"
     enhanced_image: str = Field(description="Base64 编码的增强图（含检测框）")
+    reference_image: str = Field(description="Base64 编码的亮场参考图", default="")
     detections: list[Detection] = []
     analysis: EnhanceAnalysis = EnhanceAnalysis()
     inference_time_ms: int = 0

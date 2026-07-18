@@ -67,3 +67,41 @@ def auto_enhance(image: np.ndarray) -> np.ndarray:
         "sharpen": True,
     }
     return enhance(image, default_params)
+
+
+def brightfield_enhance(image: np.ndarray, bg_brightness: int = 220) -> np.ndarray:
+    """
+    暗场→亮场风格转换：缺陷变为黑色，背景变为亮色。
+
+    原理：
+    1. 先做标准暗场增强（缺陷变亮，背景变灰）
+    2. 反转像素值（255 - x），使缺陷变暗、背景变亮
+    3. 调整对比度和 gamma 使背景更亮、缺陷更黑
+
+    Args:
+        image: 输入暗场灰度图 (H, W)，uint8 [0,255]
+        bg_brightness: 目标背景亮度 (默认 220/255)
+
+    Returns:
+        亮场风格灰度图 (H, W), uint8 [0,255]，缺陷呈黑色
+    """
+    # 1. 标准暗场增强 — 让缺陷信号放大
+    enhanced = auto_enhance(image)
+
+    # 2. 反转：暗场（缺陷亮）→ 亮场（缺陷暗）
+    inverted = 255 - enhanced
+
+    # 3. 调整对比度：拉伸到目标范围
+    #   - 背景（原本的暗部）→ bg_brightness
+    #   - 缺陷（原本的亮部）→ 更低值（变黑）
+    result = inverted.astype(np.float32)
+    result = (result / 255.0) ** 0.85 * bg_brightness
+    result = np.clip(result, 0, 255).astype(np.uint8)
+
+    # 4. 轻度锐化
+    kernel = np.array([[-1, -1, -1],
+                       [-1,  9, -1],
+                       [-1, -1, -1]], dtype=np.float32)
+    result = cv2.filter2D(result, -1, kernel)
+
+    return result.astype(np.uint8)
