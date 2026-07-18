@@ -96,6 +96,39 @@ services:
       timeout: 10s
       retries: 3
 
+  wafer-qwen-service:
+    build: ./wafer-qwen-service
+    ports: ["8001:8001"]
+    environment:
+      QWEN_LLAMA_SERVER_URL: http://llama-server:8002/v1
+      QWEN_HOST: "0.0.0.0"
+      QWEN_PORT: 8001
+    depends_on:
+      - llama-server
+    restart: unless-stopped
+
+  llama-server:
+    image: ghcr.io/ggerganov/llama.cpp:full
+    ports: ["8002:8002"]
+    volumes:
+      - type: bind
+        source: /mnt/d/models
+        target: /models
+    command:
+      - --model
+      - /models/qwen2.5-vl-7b-instruct-q4_k_m.gguf
+      - --port
+      - "8002"
+      - --host
+      - "0.0.0.0"
+      - --ctx-size
+      - "8192"
+      - --batch-size
+      - "512"
+      - --n-gpu-layers
+      - "0"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   minio_data:
