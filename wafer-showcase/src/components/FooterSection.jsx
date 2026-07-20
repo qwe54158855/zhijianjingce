@@ -1,4 +1,4 @@
-import { ArrowUpRight, Github, FileText, Mail, Sparkles, ArrowRight } from 'lucide-react'
+import { ArrowUpRight, Github, FileText, Mail, Sparkles, Database, ArrowRight } from 'lucide-react'
 
 export default function FooterSection({ onNavigate }) {
   return (
@@ -55,7 +55,34 @@ export default function FooterSection({ onNavigate }) {
           </a>
         </div>
 
-        {/* AI Navigation entry - last */}
+        {/* Dataset Browser entry */}
+        <button
+          onClick={() => onNavigate?.('dataset')}
+          className="group w-full max-w-lg flex items-center justify-between px-6 py-4 rounded-2xl border border-emerald-500/20
+                     bg-gradient-to-r from-emerald-500/10 to-cyan-500/10 backdrop-blur-sm
+                     hover:from-emerald-500/20 hover:to-cyan-500/20 hover:border-emerald-500/40
+                     transition-all duration-500"
+        >
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-emerald-500/10 group-hover:scale-110 transition-transform duration-300">
+              <Database className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div className="text-left">
+              <h3 className="text-base sm:text-lg font-semibold text-white group-hover:text-emerald-400 transition-colors duration-300">
+                数据集浏览器
+              </h3>
+              <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
+                浏览 1150 张标注图像 · Qwen-VL AI分类分析 · 批量评估
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 text-sm text-emerald-400 group-hover:translate-x-1 transition-transform duration-300">
+            <span>浏览数据</span>
+            <ArrowRight size={16} />
+          </div>
+        </button>
+
+        {/* AI Navigation entry */}
         <button
           onClick={() => onNavigate?.('qwen')}
           className="group w-full max-w-lg flex items-center justify-between px-6 py-4 rounded-2xl border border-tech-cyan/20

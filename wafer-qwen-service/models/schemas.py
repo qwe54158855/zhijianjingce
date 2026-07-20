@@ -66,3 +66,44 @@ class QwenAnglesResponse(BaseModel):
     success: bool = True
     angles: dict[str, str] = Field(description="{角度: base64图片} 字典")
     inference_time_ms: int = 0
+
+
+class DatasetImageInfo(BaseModel):
+    image_name: str
+    defect_id: Optional[int] = None
+    file_size_kb: float = 0
+    exists: bool = True
+
+
+class DatasetBrowseResponse(BaseModel):
+    success: bool = True
+    total: int = 0
+    images: list[DatasetImageInfo] = []
+
+
+class DatasetClassifyRequest(BaseModel):
+    image_name: str
+    top_k: int = 3
+
+
+class DatasetClassifyResult(BaseModel):
+    defect_id: Optional[int] = None
+    confidence: float = 0.0
+    reason: str = ""
+
+
+class DatasetClassifyResponse(BaseModel):
+    success: bool = True
+    image_name: str = ""
+    ground_truth: Optional[int] = None
+    predictions: list[DatasetClassifyResult] = []
+    analysis_text: str = ""
+    inference_time_ms: int = 0
+
+
+class DatasetBatchResult(BaseModel):
+    total: int = 0
+    processed: int = 0
+    correct: int = 0
+    accuracy: float = 0.0
+    results: list[dict] = []

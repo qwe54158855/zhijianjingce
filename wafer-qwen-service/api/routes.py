@@ -1,15 +1,21 @@
 import base64
+import csv
 import logging
 import os
 import time
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from core.config import settings
 from engine import enhancer, detector as det_mod, visualizer, reporter, angle_generator
 from models.schemas import (
+    DatasetBrowseResponse,
+    DatasetClassifyRequest,
+    DatasetClassifyResponse,
+    DatasetClassifyResult,
+    DatasetImageInfo,
     Detection,
     EnhanceAnalysis,
     QwenEnhanceRequest,
@@ -26,6 +32,63 @@ router = APIRouter()
 
 # 从 main.py 引入全局 llama_client
 import main as main_module
+
+# 数据集路径
+DATASET_DIR = r"D:\cy\images"
+LABEL_CSV = os.path.join(DATASET_DIR, "label.csv")
+
+# 数据集缓存
+_dataset_cache = None
+
+
+def _load_dataset():
+    """加载数据集索引（带缓存）"""
+    global _dataset_cache
+    if _dataset_cache is not None:
+        return _dataset_cache
+
+    dataset = {}
+    if os.path.exists(LABEL_CSV):
+        with open(LABEL_CSV, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                name = row["IMAGE_NAME"]
+                try:
+                    did = int(row["DEFECT_ID"])
+                except ValueError:
+                    did = 0
+                dataset[name] = did
+
+    # 扫描目录实际存在的文件
+    all_images = sorted([
+        f for f in os.listdir(DATASET_DIR)
+        if f.lower().endswith((".jpg", ".jpeg", ".png")) and f != "label.csv"
+    ])
+
+    _dataset_cache = {
+        "labels": dataset,
+        "images": all_images,
+        "total": len(all_images),
+    }
+    logger.info(f"Dataset loaded: {len(all_images)} images, {len(dataset)} labeled")
+    return _dataset_cache
+
+
+def _read_dataset_image(image_name: str) -> np.ndarray:
+    """从数据集读取图像"""
+    path = os.path.join(DATASET_DIR, image_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"Image {image_name} not found")
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise HTTPException(status_code=500, detail=f"Failed to read {image_name}")
+    return img
+
+
+def _image_to_base64(img: np.ndarray) -> str:
+    """OpenCV图像 → base64"""
+    _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return base64.b64encode(buf).decode("utf-8")
 
 # 亮场参考图（缓存）
 _ref_img_b64 = None
@@ -252,3 +315,235 @@ async def angles_endpoint(request: QwenAnglesRequest):
         angles=result,
         inference_time_ms=elapsed,
     )
+
+
+# ========== 数据集端点 ==========
+
+@router.get("/dataset/image/{image_name}")
+async def dataset_image(image_name: str):
+    """获取数据集中某张图像的 JPEG 数据（供前端直接显示）"""
+    path = os.path.join(DATASET_DIR, image_name)
+    if not os.path.exists(path):
+        raise HTTPException(404, f"Image {image_name} not found")
+    from fastapi.responses import Response
+    with open(path, "rb") as f:
+        return Response(content=f.read(), media_type="image/jpeg")
+
+
+@router.get("/dataset/list", response_model=DatasetBrowseResponse)
+async def dataset_list(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    class_filter: int = Query(0, ge=0, description="按DEFECT_ID筛选，0=全部"),
+):
+    """浏览数据集"""
+    ds = _load_dataset()
+    labels = ds["labels"]
+    images = ds["images"]
+
+    # 过滤
+    if class_filter > 0:
+        filtered = [n for n in images if labels.get(n) == class_filter]
+    else:
+        filtered = images
+
+    total = len(filtered)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total)
+    page_items = filtered[start:end]
+
+    return DatasetBrowseResponse(
+        success=True,
+        total=total,
+        images=[
+            DatasetImageInfo(
+                image_name=name,
+                defect_id=labels.get(name),
+                file_size_kb=round(os.path.getsize(os.path.join(DATASET_DIR, name)) / 1024, 1),
+            )
+            for name in page_items
+        ],
+    )
+
+
+@router.get("/dataset/classes")
+async def dataset_classes():
+    """获取数据集的所有类别及其数量"""
+    ds = _load_dataset()
+    labels = ds["labels"]
+    from collections import Counter
+    counts = Counter(labels.values())
+    classes = sorted(counts.keys())
+    return {
+        "success": True,
+        "total_classes": len(classes),
+        "total_images": ds["total"],
+        "classes": [
+            {"defect_id": int(c), "count": counts[c]}
+            for c in classes
+        ],
+    }
+
+
+@router.post("/dataset/classify", response_model=DatasetClassifyResponse)
+async def dataset_classify(request: DatasetClassifyRequest):
+    """用 Qwen-VL 对数据集单张图像做缺陷分类"""
+    start = time.time()
+
+    ds = _load_dataset()
+    if request.image_name not in ds["labels"] and request.image_name not in ds["images"]:
+        raise HTTPException(404, f"Image '{request.image_name}' not found in dataset")
+
+    img = _read_dataset_image(request.image_name)
+    img_b64 = _image_to_base64(img)
+    ground_truth = ds["labels"].get(request.image_name)
+
+    llama = main_module.llama_client
+    if not llama:
+        raise HTTPException(503, "Qwen-VL client not available")
+
+    # Qwen-VL 分类 prompt
+    system_prompt = """You are a semiconductor wafer defect classification expert.
+Analyze the wafer image and classify the defect type by its DEFECT_ID number.
+Output JSON only. Be decisive."""
+
+    class_list = ", ".join([str(c) for c in sorted(set(ds["labels"].values()))])
+    user_prompt = f"""Classify this wafer image into one of the following DEFECT_ID categories: {class_list}.
+
+First, describe what you see in 1-2 sentences.
+Then output exactly 3 most likely DEFECT_ID predictions with confidence scores.
+
+Output JSON format:
+{{
+  "analysis": "brief description of what you see",
+  "predictions": [
+    {{"defect_id": 1, "confidence": 0.95, "reason": "visible chipping at edge"}},
+    {{"defect_id": 2, "confidence": 0.03, "reason": "some surface texture"}},
+    {{"defect_id": 3, "confidence": 0.02, "reason": "fallback"}}
+  ]
+}}
+Note: The first prediction should be your most confident answer. Confidence MUST sum to approximately 1.0 across all top-{request.top_k} predictions."""
+
+    try:
+        result = await llama.analyze_image(
+            image_base64=img_b64,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=512,
+            temperature=0.1,
+        )
+
+        predictions = []
+        if result and "predictions" in result:
+            for p in result["predictions"][:request.top_k]:
+                predictions.append(DatasetClassifyResult(
+                    defect_id=p.get("defect_id"),
+                    confidence=float(p.get("confidence", 0)),
+                    reason=p.get("reason", ""),
+                ))
+
+        # 如果 Qwen 返回了 top-3，补充到 k 个
+        while len(predictions) < request.top_k:
+            predictions.append(DatasetClassifyResult(
+                defect_id=None, confidence=0.0, reason="no prediction"
+            ))
+
+        analysis_text = result.get("analysis", "") if result else ""
+
+    except Exception as e:
+        logger.warning(f"Qwen classification failed: {e}")
+        predictions = [DatasetClassifyResult(defect_id=None, confidence=0, reason="error")]
+        analysis_text = str(e)
+
+    elapsed = int((time.time() - start) * 1000)
+
+    return DatasetClassifyResponse(
+        success=True,
+        image_name=request.image_name,
+        ground_truth=ground_truth,
+        predictions=predictions,
+        analysis_text=analysis_text,
+        inference_time_ms=elapsed,
+    )
+
+
+@router.post("/dataset/batch-eval")
+async def dataset_batch_eval(
+    sample_size: int = Query(10, ge=1, le=100, description="随机采样数"),
+):
+    """批量评估：随机采样N张用Qwen-VL分类，统计准确率"""
+    start = time.time()
+
+    ds = _load_dataset()
+    labels = ds["labels"]
+
+    # 只取有标签的图片
+    labeled = [n for n in ds["images"] if n in labels]
+    if not labeled:
+        return {"success": False, "error": "No labeled images found"}
+
+    import random
+    random.shuffle(labeled)
+    sample = labeled[:min(sample_size, len(labeled))]
+
+    llama = main_module.llama_client
+    if not llama:
+        raise HTTPException(503, "Qwen-VL client not available")
+
+    results = []
+    correct = 0
+    system_prompt = "Classify the wafer defect by DEFECT_ID. Output JSON only."
+
+    for img_name in sample:
+        img = _read_dataset_image(img_name)
+        img_b64 = _image_to_base64(img)
+        gt = labels[img_name]
+
+        try:
+            result = await llama.analyze_image(
+                image_base64=img_b64,
+                system_prompt=system_prompt,
+                user_prompt=f"Output {{'defect_id': <number>, 'confidence': <0-1>, 'reason': '<brief>'}}. Classify this wafer image.",
+                max_tokens=256,
+                temperature=0.1,
+            )
+
+            predicted = None
+            conf = 0
+            if result:
+                predicted = result.get("defect_id")
+                conf = result.get("confidence", 0)
+
+            is_correct = (predicted == gt)
+            if is_correct:
+                correct += 1
+
+            results.append({
+                "image_name": img_name,
+                "ground_truth": gt,
+                "predicted": predicted,
+                "confidence": conf,
+                "correct": is_correct,
+            })
+        except Exception as e:
+            results.append({
+                "image_name": img_name,
+                "ground_truth": gt,
+                "predicted": None,
+                "confidence": 0,
+                "correct": False,
+                "error": str(e),
+            })
+
+    elapsed = int((time.time() - start) * 1000)
+    accuracy = correct / len(sample) if sample else 0
+
+    return {
+        "success": True,
+        "total": len(sample),
+        "processed": len(results),
+        "correct": correct,
+        "accuracy": round(accuracy, 4),
+        "inference_time_ms": elapsed,
+        "results": results,
+    }

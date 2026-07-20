@@ -37,3 +37,33 @@ export async function qwenAngles(imageBase64) {
   }, { timeout: 60000 });
   return toCamelCase(data);
 }
+
+// ===== Dataset API =====
+
+export async function getDatasetClasses() {
+  const { data } = await axios.get(`${API_BASE}/qwen/dataset/classes`);
+  return toCamelCase(data);
+}
+
+export async function getDatasetList(page = 1, pageSize = 50, classFilter = 0) {
+  const { data } = await axios.get(`${API_BASE}/qwen/dataset/list`, {
+    params: { page, page_size: pageSize, class_filter: classFilter },
+  });
+  return toCamelCase(data);
+}
+
+export async function classifyDatasetImage(imageName, topK = 3) {
+  const { data } = await axios.post(`${API_BASE}/qwen/dataset/classify`, {
+    image_name: imageName,
+    top_k: topK,
+  }, { timeout: 60000 });
+  return toCamelCase(data);
+}
+
+export async function batchEvalDataset(sampleSize = 10) {
+  const { data } = await axios.post(`${API_BASE}/qwen/dataset/batch-eval`, null, {
+    params: { sample_size: sampleSize },
+    timeout: 300000,
+  });
+  return toCamelCase(data);
+}
