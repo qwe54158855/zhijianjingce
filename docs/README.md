@@ -13,6 +13,8 @@
 | [Showcase Design](showcase-design.md) | 前端展厅设计文档 | wafer-showcase-design.md |
 | [Competition Guide](competition-guide.md) | 光电竞赛策划修改指导 | competition-paper-tech-revision-guide.md |
 | [Session Archive](archive/SESSION_RECORD.md) | 开发会话记录（归档） | SESSION_RECORD.md |
+| **[Development Log](DEVELOPMENT_LOG.md)** | **完整开发日志（含17项对比实验，1271行）** | 综合所有源文件 |
+| **[Development Log DOCX](DEVELOPMENT_LOG.docx)** | **开发日志 Word 版（63个表格，63KB）** | 转换自 DEVELOPMENT_LOG.md |
 | [Original: Complete Reference](COMPLETE_TECHNICAL_REFERENCE.md) | 完整技术参考 v2.0（原始版） | — |
 | [Original: Technical Roadmap](TECHNICAL_ROADMAP.md) | 技术路线 v1.0（被 v2.0 覆盖） | — |
 

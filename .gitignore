@@ -111,6 +111,7 @@ brainstorming/
 # ============================
 *.docx
 *.pdf
+!docs/DEVELOPMENT_LOG.docx
 !docs/**/*.md
 
 # ============================
