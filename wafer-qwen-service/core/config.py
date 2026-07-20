@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     llama_server_url: str = "http://localhost:8002/v1"
     llama_model_name: str = "qwen2.5-vl-7b"
     llama_timeout: int = 120
+    llama_model_path: str = r"D:\models\Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+    llama_mmproj_path: str = r"D:\models\mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
 
     # Enhancement defaults
     default_clahe_clip: float = 2.5

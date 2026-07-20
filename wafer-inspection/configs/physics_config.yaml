@@ -1,0 +1,44 @@
+# PISM/ASG/物理增强模块超参数配置
+
+physics:
+  enabled: true
+  lambda_in: 266.0
+  lambda_out: 193.0
+
+  # PISM
+  pism:
+    channels_per_stage: [56, 112, 224, 448]
+    mie_table_size: 512
+    lower_bound: 1.0
+    upper_bound: 8.0
+    residual_scale: 0.1  # 残差缩放因子
+
+  # ASG
+  asg:
+    enabled: true
+    target_angles: [15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75]
+    polar_width: 512
+    modulation_range: 0.3  # 散射调制最大幅度
+
+  # 融合
+  fusion:
+    sgf_gamma: 0.7  # SGF 物理先验混合权重
+    angle_fusion_gamma: 0.7  # 角度融合物理先验权重
+
+# 训练损失权重
+training:
+  stage1:
+    lambda_cycle: 10.0
+    lambda_idt: 0.5
+    lambda_gan: 1.0
+    lambda_lpips: 0.06
+    lambda_scat: 0.05
+    lambda_spec: 0.02
+
+  stage2:
+    lambda_det_266: 1.0
+    lambda_det_193: 1.0
+    lambda_det_fused: 0.5
+    lambda_scat: 0.05
+    lambda_spec: 0.02
+    lambda_angle: 0.3

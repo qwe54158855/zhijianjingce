@@ -44,13 +44,32 @@ class LlamaClient:
             wsl_model = model_path.replace("D:", "/mnt/d").replace("\\", "/").replace("d:", "/mnt/d")
             model_path = wsl_model
 
-        cmd = [
-            "wsl.exe", "bash", "-c",
-            f"export LD_LIBRARY_PATH=/tmp/llama-bin/build/bin && exec /tmp/llama-bin/build/bin/llama-server "
-            f"-m {model_path} "
-            f"--port {self.base_url.split(':')[-1].split('/')[0] or '8002'} "
-            f"--host 0.0.0.0 --ctx-size 4096 --batch-size 256 --n-gpu-layers 0"
-        ]
+        mmproj_path = settings.llama_mmproj_path
+        if not os.path.exists(mmproj_path):
+            mmproj_path = mmproj_path.replace("D:", "/mnt/d").replace("\\", "/").replace("d:", "/mnt/d")
+
+        llama_bin = r"D:\cy\llama-b10068\llama-server.exe"
+        if not os.path.exists(llama_bin):
+            # Fallback: try WSL path
+            cmd = [
+                "wsl.exe", "bash", "-c",
+                f"export LD_LIBRARY_PATH=/tmp/llama-bin/build/bin && exec /tmp/llama-bin/build/bin/llama-server "
+                f"-m {model_path} "
+                f"--mmproj {mmproj_path} "
+                f"--port {self.base_url.split(':')[-1].split('/')[0] or '8002'} "
+                f"--host 0.0.0.0 --ctx-size 4096 --batch-size 256 --n-gpu-layers 0"
+            ]
+        else:
+            cmd = [
+                llama_bin,
+                "-m", model_path,
+                "--mmproj", mmproj_path,
+                "--port", self.base_url.split(':')[-1].split('/')[0] or '8002',
+                "--host", "0.0.0.0",
+                "--ctx-size", "4096",
+                "--batch-size", "256",
+                "--n-gpu-layers", "0",
+            ]
         logger.info(f"Launching: {' '.join(cmd)}")
         try:
             self.server_process = subprocess.Popen(

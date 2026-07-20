@@ -1,0 +1,41 @@
+# Docker-free dev profile: H2 + local filesystem + in-memory cache
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:wafer;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+
+minio:
+  enabled: false
+
+storage:
+  local:
+    path: ./data/uploads
+
+lora:
+  service:
+    url: http://localhost:8000
+
+app:
+  async:
+    core-pool-size: 2
+    max-pool-size: 4
+    queue-capacity: 50

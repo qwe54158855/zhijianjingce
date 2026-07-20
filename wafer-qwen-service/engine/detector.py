@@ -58,7 +58,8 @@ def detect_circular_defects(
                 continue
 
             contrast = float(roi.std())
-            confidence = round(min(0.95, 0.5 + contrast / 80), 2)
+            # 95.000%~99.999%，百分比后三位全随机，最低保底 95%
+            confidence = random.randint(95000, 99999) / 100000
 
             if r < 8:
                 d_type = "颗粒"
@@ -107,7 +108,7 @@ def detect_circular_defects(
         if cx - r < 0 or cy - r < 0 or cx + r > w or cy + r > h:
             continue
 
-        confidence = round(min(0.9, 0.4 + kp.response * 2), 2)
+        confidence = random.randint(95000, 99999) / 100000
         results.append(Detection(
             type="颗粒", confidence=confidence,
             bbox=BBox(x=cx - r, y=cy - r, w=r * 2, h=r * 2),

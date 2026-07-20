@@ -36,6 +36,7 @@ class QwenEnhanceResponse(BaseModel):
     reference_image: str = Field(description="Base64 编码的亮场参考图", default="")
     detections: list[Detection] = []
     analysis: EnhanceAnalysis = EnhanceAnalysis()
+    analysis_text: str = Field(description="Qwen-VL 视觉分析文本", default="")
     inference_time_ms: int = 0
 
 

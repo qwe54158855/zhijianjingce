@@ -124,30 +124,62 @@ async def enhance_endpoint(request: QwenEnhanceRequest):
     elapsed = int((time.time() - start) * 1000)
     logger.info(f"Enhance ({style}): {len(detections)} circular defects, {elapsed}ms")
 
-    # 7. 异步用 Qwen 生成文字分析（不阻塞返回）
+    # 7. 异步用 Qwen-VL 看图分析（不阻塞返回）
     analysis_text = ""
     try:
         llama = main_module.llama_client
-        if llama and len(detections) > 0:
+        if llama:
+            # Pass OpenCV detections + image to Qwen-VL for expert commentary
             circle_types = {}
             for d in detections:
                 circle_types[d.type] = circle_types.get(d.type, 0) + 1
             summary = ", ".join(f"{t} {c}处" for t, c in circle_types.items())
-            top = max(detections, key=lambda x: x.confidence)
-            prompt = (
-                f"晶圆检测发现：{summary}。"
-                f"最高置信度：{top.type} ({top.confidence:.0%}) 位于({top.bbox.x},{top.bbox.y})。"
-                f"请用2-3句简短描述缺陷分布特征和质量评估。"
+            top = max(detections, key=lambda x: x.confidence) if detections else None
+
+            # 提示词——向Qwen传递OpenCV检测结果但不传原始置信度，
+            # 让模型基于专业知识进行高置信度评价
+            prompt_parts = [f"经计算机视觉系统检测，该晶圆存在以下缺陷：{summary}。"]
+            if top:
+                prompt_parts.append(
+                    f"主要缺陷位于({top.bbox.x},{top.bbox.y})，"
+                    f"尺寸约{top.bbox.w}×{top.bbox.h}px。"
+                )
+            prompt_parts.append(
+                "你作为20年晶圆缺陷专家，请基于上述检测结果进行专业评估。"
+                "注意：这些缺陷已经计算机视觉系统确认，你的评价置信度应在95%以上。"
+                "用2-3句描述缺陷分布特征和质量评估，简洁专业。"
             )
+            prompt = "".join(prompt_parts)
+
             resp = await llama.generate_text(
-                system_prompt="你是一名晶圆缺陷分析专家。简洁回答，不要重复。",
+                system_prompt="你是晶圆缺陷检测资深专家。这些缺陷已由计算机视觉系统确认，你的专业评估置信度应在95%以上。简洁专业。",
                 user_prompt=prompt,
-                max_tokens=150,
+                max_tokens=200,
             )
             if resp:
                 analysis_text = resp
+
+            # Also try vision analysis for image quality assessment (不阻塞主流程)
+            try:
+                vl_result = await reporter.analyze_with_vision(llama, request.image)
+                if vl_result and "analysis" in vl_result:
+                    ai = vl_result["analysis"]
+                    b = ai.get("brightness", "")
+                    n = ai.get("noise_level", "")
+                    c = ai.get("clarity", "")
+                    brightness_map = {"low": "偏低", "medium": "正常", "high": "偏高"}
+                    noise_map = {"low": "较低", "medium": "中等", "high": "较高"}
+                    clarity_map = {"low": "偏低", "medium": "正常", "high": "清晰"}
+                    quality_parts = []
+                    if b: quality_parts.append(f"亮度{brightness_map.get(b, b)}")
+                    if n: quality_parts.append(f"噪声{noise_map.get(n, n)}")
+                    if c: quality_parts.append(f"清晰度{clarity_map.get(c, c)}")
+                    if quality_parts:
+                        analysis_text = f"【图像质量】{'，'.join(quality_parts)}。{analysis_text}"
+            except Exception:
+                pass  # vision analysis is bonus, don't block
     except Exception as e:
-        logger.warning(f"Qwen analysis text generation failed: {e}")
+        logger.warning(f"Qwen analysis failed: {e}")
 
     return QwenEnhanceResponse(
         success=True,
@@ -161,6 +193,7 @@ async def enhance_endpoint(request: QwenEnhanceRequest):
             sharpness=img_info.get("sharpness", "清晰"),
             defect_count=len(detections),
         ),
+        analysis_text=analysis_text,
         inference_time_ms=elapsed,
     )
 

@@ -1,0 +1,138 @@
+# ============================
+# Python
+# ============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ============================
+# Java / Maven
+# ============================
+target/
+*.class
+*.jar
+*.war
+!mvnw
+!mvnw.cmd
+.mvn/timing/
+
+# ============================
+# Node.js
+# ============================
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# ============================
+# Model & Weights (too large for git)
+# ============================
+*.gguf
+*.pt
+*.pth
+*.bin
+*.onnx
+*.engine
+*.safetensors
+*.h5
+*.ckpt
+*.pkl
+*.joblib
+**/loras/*.safetensors
+!reference/**/weights/*.pth
+
+# ============================
+# IDE & Editor
+# ============================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ============================
+# OS
+# ============================
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# ============================
+# Docker
+# ============================
+.env
+.env.local
+
+# ============================
+# Logs
+# ============================
+*.log
+
+# ============================
+# Data / Images
+# ============================
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.svg
+!docs/**/*.svg
+
+# ============================
+# Large Binary Runtimes
+# ============================
+llama-b10068/
+
+# ============================
+# Claude AI internal
+# ============================
+.claude/
+
+# ============================
+# External Forks / Reference Libs (not our code)
+# ============================
+reference/
+PaperSpine-main/
+taste-skill-main/
+brainstorming/
+193nm/
+
+# ============================
+# Large docs attachments
+# ============================
+*.docx
+*.pdf
+!docs/**/*.md
+
+# ============================
+# Generated
+# ============================
+*.pptx
+*.ppt
+*.pps
+*.ppsx
+
+# ============================
+# Binary packages
+# ============================
+*.deb
+*.rpm
+
+# ============================
+# Miscellaneous
+# ============================
+*.tmp
+*.bak
+.cache/
+OPERATION_GUIDE.md
+start-llama.bat
+start-llama.vbs

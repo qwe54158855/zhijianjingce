@@ -1,0 +1,36 @@
+# LoRA training configuration for wafer LoRA adapters
+base_model: runwayml/stable-diffusion-v1-5
+resolution: 512
+lora_rank: 64
+lora_alpha: 32
+target_modules:
+  - to_q
+  - to_k
+  - to_v
+  - to_out.0
+  - proj_in
+  - proj_out
+  - ff.net.0.proj
+  - ff.net.2
+
+training:
+  batch_size: 4
+  learning_rate: 1e-4
+  lr_scheduler: cosine
+  num_epochs: 50
+  save_steps: 200
+  max_grad_norm: 1.0
+  mixed_precision: fp16
+  gradient_accumulation_steps: 2
+  use_8bit_adam: true
+  dataloader_num_workers: 4
+  flip_p: 0.5
+  random_crop: true
+  random_brightness: 0.1
+
+data:
+  image_column: image
+  caption_column: text
+  resolution: 512
+  center_crop: true
+  random_flip: true
